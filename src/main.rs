@@ -1,4 +1,6 @@
-use std::io::Write;
+mod weather;
+
+use std::{env, io::Write};
 
 use genai::{
     Client,
@@ -11,7 +13,7 @@ use tracing_subscriber::EnvFilter;
 const MODEL: &str = "gemini-2.0-flash";
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
         .init();
@@ -50,14 +52,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // read user requests until it sends `exit`
-    let mut user_request = String::new();
-    while user_request.trim() != "exit" {
-        user_request.clear();
+    let mut buffer = String::new();
+    print!("> ");
+    std::io::stdout().flush()?;
+    std::io::stdin().read_line(&mut buffer)?;
 
-        print!("> ");
-        std::io::stdout().flush()?;
-        std::io::stdin().read_line(&mut user_request)?;
-        let user_request = user_request.trim_start_matches('>').trim();
+    while buffer.trim() != "exit" {
+        let user_request = buffer.trim_start_matches('>').trim();
 
         if user_request.is_empty() {
             continue;
@@ -71,25 +72,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         chat_req = chat_req.append_message(chat_message);
 
         // Send the request to the model
-        chat_req = make_call(&client, chat_req).await?;
+        chat_req = call_loop(&client, chat_req).await?;
 
-        // check if the last message is a tool call
-        if let Some(last_message) = chat_req.messages.last() {
-            if let MessageContent::ToolResponses(_) = last_message.content {
-                // make another call to the model
-                debug!("Tool call response detected, making another call to the model");
-                chat_req = make_call(&client, chat_req).await?;
-            }
-        }
+        print!("> ");
+        std::io::stdout().flush()?;
+
+        buffer.clear();
+        std::io::stdin().read_line(&mut buffer)?;
     }
 
     Ok(())
 }
 
-async fn make_call(
-    client: &Client,
-    chat_req: ChatRequest,
-) -> Result<ChatRequest, Box<dyn std::error::Error>> {
+async fn call_loop(client: &Client, chat_req: ChatRequest) -> anyhow::Result<ChatRequest> {
+    let mut chat_req = make_call(client, chat_req).await?;
+    while let Some(last_message) = chat_req.messages.last() {
+        if let MessageContent::ToolResponses(_) = last_message.content {
+            // make another call to the model
+            debug!("Tool call response detected, making another call to the model");
+            chat_req = make_call(client, chat_req).await?;
+        } else {
+            break;
+        }
+    }
+
+    Ok(chat_req)
+}
+
+async fn make_call(client: &Client, chat_req: ChatRequest) -> anyhow::Result<ChatRequest> {
     // Send the request to the model
     debug!("Sending request to the model: {:?}", chat_req.messages);
     let response: ChatResponse = client.exec_chat(MODEL, chat_req.clone(), None).await?;
@@ -101,30 +111,52 @@ async fn make_call(
             chat_req.append_message(ChatMessage::assistant(text))
         }
         Some(MessageContent::ToolCalls(tool_calls)) => {
-            // debugging output
-            for tool_call in &tool_calls {
-                info!(
-                    "Tool call: \n\tFunction: {}\n\tArguments: {}",
-                    tool_call.fn_name, tool_call.fn_arguments
-                );
-            }
+            // remember the tool calls to append them to the chat request
+            let chat_req = chat_req.append_message(ChatMessage::assistant(
+                MessageContent::ToolCalls(tool_calls.clone()),
+            ));
 
-            let first_tool_call = &tool_calls[0];
-            let tool_response = ToolResponse::new(
-                first_tool_call.call_id.clone(),
-                json!({
-                    "temperature": 22.5,
-                    "condition": "Sunny",
-                    "humidity": 65
-                })
-                .to_string(),
+            // todo: support multiple tool calls
+            let tool_call = tool_calls.first().unwrap();
+            info!(
+                "Tool call: \n\tFunction: {}\n\tArguments: {}",
+                tool_call.fn_name, tool_call.fn_arguments
             );
 
-            chat_req
-                .append_message(ChatMessage::assistant(MessageContent::ToolCalls(
-                    tool_calls,
-                )))
-                .append_message(tool_response)
+            let tool_response: ToolResponse = if tool_call.fn_name == "get_weather" {
+                // todo: check if the arguments are valid
+                let args = tool_call.fn_arguments.as_object().unwrap();
+                let city = args["city"].as_str().unwrap_or("Unknown");
+                let country = args["country"].as_str().unwrap_or("Unknown");
+                let unit = args["unit"].as_str().unwrap_or("C");
+
+                let location = format!("{},{}", city, country);
+
+                // Call the weather API
+                let weather_api_key = env::var("WEATHER_API_KEY")
+                    .expect("WEATHER_API_KEY environment variable not set");
+                let weather_response = weather::get_weather(&weather_api_key, &location).await?;
+
+                let temperature: f64 = match unit {
+                    "C" => weather_response.current.temp_c,
+                    "F" => weather_response.current.temp_f,
+                    _ => weather_response.current.temp_c,
+                };
+
+                ToolResponse::new(
+                    tool_call.call_id.clone(),
+                    json!({
+                        "temperature": temperature,
+                        "condition": weather_response.current.condition.text,
+                        "humidity": weather_response.current.humidity,
+                    })
+                    .to_string(),
+                )
+            } else {
+                todo!()
+            };
+
+            chat_req.append_message(tool_response)
         }
         Some(_) => {
             println!("> Bot: Unsupported response type");

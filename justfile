@@ -3,6 +3,10 @@ set dotenv-load
 default:
     just --list
 
+# Clean the artifacts
+clean:
+    cargo clean
+
 # Format the code
 fmt:
     cargo fmt
