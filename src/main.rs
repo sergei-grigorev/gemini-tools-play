@@ -10,7 +10,7 @@ use genai::{
 };
 use serde_json::json;
 use tracing::{debug, info};
-use tracing_subscriber::{EnvFilter, fmt::format};
+use tracing_subscriber::EnvFilter;
 
 const MODEL: &str = "gemini-2.0-flash";
 
