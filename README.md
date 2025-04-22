@@ -9,7 +9,7 @@ To run the project you need to register on some services and create a file named
 
 All that services provide free token you can use to play the same I do.
 
-For convinent work I use [just](https://just.systems) which is similar to Makefile. To run the project call `just run`
+For convinent work I use [just](https://just.systems) which is similar to Makefile. To run the project make sure you have `.env` file with that format
 
 ```text
 RUST_LOG="info"
@@ -18,4 +18,4 @@ WEATHER_API_KEY="<your weather api>"
 IP_GEOLOCATION_API_KEY="<your ip>"
 ```
 
-Then run 
+Then run `just run`
