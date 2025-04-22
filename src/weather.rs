@@ -2,8 +2,6 @@ use tracing::{debug, error, info};
 
 mod response;
 
-pub use response::*;
-
 const WEATHER_ENDPOINT: &str = "https://api.weatherapi.com/v1/current.json";
 
 pub async fn get_weather(
